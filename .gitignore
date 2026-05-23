@@ -1,0 +1,41 @@
+## Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]64/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+
+## Claude Code (per-user state)
+.claude/
+
+## Rider / VS Code
+.idea/
+.vscode/
+
+## MSBuild / diagnostics
+*.binlog
+pp.xml
+
+## Test results
+[Tt]est[Rr]esults/
+
+## NuGet
+*.nupkg
+packages/
+
+## Installer artifacts
+publish/
+dist/
+AppPackages/
+BundleArtifacts/
+*.msi
+*.msix
+*.wixpdb

@@ -1,0 +1,89 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $raw = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' } else { '1.0.0' }
+          $v = $raw.TrimStart('v')
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { $v = '1.0.0' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          # Patch the MSIX manifest to the 4-part build version.
+          $manifest = 'src/PcapViewer.App/Package.appxmanifest'
+          [xml]$xml = Get-Content $manifest
+          $xml.Package.Identity.Version = "$v.0"
+          $xml.Save((Resolve-Path $manifest).Path)
+          Write-Host "Building version $v"
+
+      - name: Test
+        run: dotnet test tests/PcapViewer.Core.Tests/PcapViewer.Core.Tests.csproj -c Release
+
+      - name: Build MSIX
+        run: >
+          dotnet build src/PcapViewer.App/PcapViewer.App.csproj
+          -c Release -p:Platform=x64
+          -p:GenerateAppxPackageOnBuild=true
+          -p:AppxPackageSigningEnabled=false
+          -p:UapAppxPackageBuildMode=SideloadOnly
+          -p:AppxBundle=Never
+          -p:WindowsAppSDKSelfContained=true
+
+      - name: Publish app for MSI
+        run: >
+          dotnet publish src/PcapViewer.App/PcapViewer.App.csproj
+          -c Release -p:Platform=x64 -r win-x64 --self-contained true
+          -p:WindowsPackageType=None -o publish
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Build MSI
+        run: wix build installer.wxs -arch x64 -d AppVersion=${{ steps.ver.outputs.version }} -out SimplePCapViewer.msi
+
+      - name: Collect installers
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item SimplePCapViewer.msi "dist/SimplePCapViewer-$v.msi"
+          $msix = Get-ChildItem src/PcapViewer.App/AppPackages -Recurse -Filter *.msix |
+                  Select-Object -First 1
+          if (-not $msix) { throw 'MSIX package not found.' }
+          Copy-Item $msix.FullName "dist/SimplePCapViewer-$v.msix"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers
+          path: dist/*
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

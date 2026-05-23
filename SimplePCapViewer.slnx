@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PcapViewer.App/PcapViewer.App.csproj">
+      <Platform Solution="Debug|*" Project="x64" />
+    </Project>
+    <Project Path="src/PcapViewer.Core/PcapViewer.Core.csproj" />
+    <Project Path="src/PcapViewer.Mcp/PcapViewer.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PcapViewer.Core.Tests/PcapViewer.Core.Tests.csproj" />
+  </Folder>
+</Solution>
