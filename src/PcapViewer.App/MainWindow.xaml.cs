@@ -124,6 +124,13 @@ public sealed partial class MainWindow : Window
 
     private async void OnAttachClick(object sender, RoutedEventArgs e)
     {
+        // Show the capture-instructions dialog first; the user can copy commands
+        // and then click "Browse…" to actually pick the file.
+        var instructions = new AttachInstructionsDialog { XamlRoot = Content.XamlRoot };
+        var result = await instructions.ShowAsync();
+        if (result != ContentDialogResult.Primary)
+            return;
+
         var picker = new FileOpenPicker
         {
             SuggestedStartLocation = PickerLocationId.Desktop,
