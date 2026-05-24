@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using ModelContextProtocol.Server;
 using PcapViewer.Core;
+using PcapViewer.Core.Events;
 using PcapViewer.Core.Models;
 
 namespace PcapViewer.Mcp;
@@ -292,6 +293,137 @@ public sealed class PcapMcpTools
         }
     }
 
+    // ---- attached event sources (.evtx / .etl) --------------------------
+
+    [McpServerTool(Name = "attach_events")]
+    [Description("Attach a Windows Event Log (.evtx) or ETW trace (.etl) file to the session so " +
+                 "its events can be searched alongside the pcap. The reader is chosen from the " +
+                 "extension. Network-related events (TCPIP, Schannel, DNS-Client, DHCP, WLAN, " +
+                 "SMB, WFP, Winsock-AFD, etc.) are tagged automatically.")]
+    public static async Task<string> AttachEvents(
+        [Description("Absolute path to an .evtx or .etl file.")] string path,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var attachment = await PcapSession.Current.AttachAsync(path, cancellationToken);
+            int network = attachment.Events.Count(e => e.IsNetwork);
+            return McpJson.Serialize(new
+            {
+                file = attachment.FileName,
+                path = attachment.FilePath,
+                kind = attachment.Kind,
+                eventCount = attachment.Events.Count,
+                networkEventCount = network,
+            });
+        }
+        catch (Exception ex)
+        {
+            return McpJson.Failure(ex.Message);
+        }
+    }
+
+    [McpServerTool(Name = "list_attachments")]
+    [Description("List the .evtx / .etl files attached to the session, with the number of events " +
+                 "each contributed (total and network-relevant).")]
+    public static string ListAttachments()
+    {
+        var attachments = PcapSession.Current.Attachments;
+        return McpJson.Serialize(new
+        {
+            count = attachments.Count,
+            totalEvents = PcapSession.Current.EventIndex.Count,
+            attachments = attachments.Select(a => new
+            {
+                a.FileName,
+                a.FilePath,
+                a.Kind,
+                eventCount = a.Events.Count,
+                networkEventCount = a.Events.Count(e => e.IsNetwork),
+            }),
+        });
+    }
+
+    [McpServerTool(Name = "detach_events")]
+    [Description("Remove a previously-attached .evtx / .etl file from the session.")]
+    public static string DetachEvents(
+        [Description("The attachment's full path, as reported by list_attachments.")] string path)
+        => McpJson.Serialize(new { removed = PcapSession.Current.Detach(path), path });
+
+    [McpServerTool(Name = "search_events")]
+    [Description("Search events from every attached .evtx / .etl file. Defaults to network-related " +
+                 "events only (TCP/IP, Schannel, DNS, DHCP, WLAN, SMB, WFP, …). Set networkOnly=false " +
+                 "to include everything in the attached files.")]
+    public static string SearchEvents(
+        [Description("Free-text query matched against the event message, provider, channel, and event ID. Optional.")]
+        string? query = null,
+        [Description("Restrict to events whose provider or channel name contains this string. Optional.")]
+        string? providerOrChannel = null,
+        [Description("Restrict to a level: Critical / Error / Warning / Information / Verbose. Optional.")]
+        string? level = null,
+        [Description("If true (default), only return events from known network-related providers/channels.")]
+        bool networkOnly = true,
+        [Description("Zero-based offset into the result list.")] int offset = 0,
+        [Description("Maximum number of events to return (1-500).")] int limit = 50)
+    {
+        offset = Math.Max(0, offset);
+        limit = Math.Clamp(limit, 1, 500);
+
+        var matches = PcapSession.Current.EventIndex
+            .Search(query, providerOrChannel, level, from: null, to: null, networkOnly)
+            .ToList();
+
+        var page = matches.Skip(offset).Take(limit).Select(ToDto).ToList();
+        return McpJson.Serialize(new
+        {
+            total = matches.Count,
+            offset,
+            count = page.Count,
+            networkOnly,
+            events = page,
+        });
+    }
+
+    [McpServerTool(Name = "events_near_packet")]
+    [Description("Return events whose timestamps fall within a window around a packet's capture time. " +
+                 "Use this to correlate packet-level activity with Schannel TLS failures, DNS lookups, " +
+                 "WLAN events, etc.")]
+    public static string EventsNearPacket(
+        [Description("1-based packet number from the open capture.")] int frameNumber,
+        [Description("Seconds before the packet to include.")] double secondsBefore = 2,
+        [Description("Seconds after the packet to include.")] double secondsAfter = 2,
+        [Description("If true (default), only network-related events.")] bool networkOnly = true,
+        [Description("Maximum number of events to return (1-500).")] int limit = 100)
+    {
+        var document = PcapSession.Current.Document;
+        if (document is null)
+            return McpJson.NoCapture();
+        var frame = document.GetFrame(frameNumber);
+        if (frame is null)
+            return McpJson.Failure($"No such frame: {frameNumber}");
+
+        limit = Math.Clamp(limit, 1, 500);
+        var window = PcapSession.Current.EventIndex
+            .InWindow(frame.Timestamp.ToUniversalTime(),
+                      TimeSpan.FromSeconds(Math.Max(0, secondsBefore)),
+                      TimeSpan.FromSeconds(Math.Max(0, secondsAfter)),
+                      networkOnly)
+            .Take(limit)
+            .Select(ToDto)
+            .ToList();
+
+        return McpJson.Serialize(new
+        {
+            frameNumber,
+            frameTime = frame.Timestamp,
+            secondsBefore,
+            secondsAfter,
+            networkOnly,
+            count = window.Count,
+            events = window,
+        });
+    }
+
     private static object ToDto(PacketSummary p) => new
     {
         p.Number,
@@ -302,5 +434,19 @@ public sealed class PcapMcpTools
         p.Protocol,
         p.Length,
         p.Info,
+    };
+
+    private static object ToDto(EventEntry e) => new
+    {
+        e.Timestamp,
+        e.Source,
+        e.Provider,
+        e.Channel,
+        e.EventId,
+        e.Level,
+        e.ProcessId,
+        e.Message,
+        file = Path.GetFileName(e.AttachmentFile),
+        e.IsNetwork,
     };
 }

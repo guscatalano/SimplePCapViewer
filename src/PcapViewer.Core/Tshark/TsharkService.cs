@@ -274,15 +274,9 @@ public sealed partial class TsharkService
 
     private static PacketDetailNode ConvertPdmlNode(XElement element)
     {
-        string label =
-            element.Attribute("showname")?.Value
-            ?? element.Attribute("show")?.Value
-            ?? element.Attribute("name")?.Value
-            ?? element.Name.LocalName;
-
         var node = new PacketDetailNode
         {
-            Label = label,
+            Label = BuildLabel(element),
             Value = element.Attribute("value")?.Value,
         };
 
@@ -292,6 +286,28 @@ public sealed partial class TsharkService
                 node.Children.Add(ConvertPdmlNode(child));
         }
         return node;
+    }
+
+    /// <summary>
+    /// PDML fields under some protos (geninfo, …) put the bare label in <c>showname</c>
+    /// and the value in <c>show</c>; for those, combine them like Wireshark renders.
+    /// Most other fields already have "Label: value" in <c>showname</c>.
+    /// </summary>
+    private static string BuildLabel(XElement element)
+    {
+        string? showname = element.Attribute("showname")?.Value;
+        string? show     = element.Attribute("show")?.Value;
+
+        if (!string.IsNullOrEmpty(showname))
+        {
+            if (!showname.Contains(": ") && !string.IsNullOrEmpty(show))
+                return $"{showname}: {show}";
+            return showname;
+        }
+
+        return show
+            ?? element.Attribute("name")?.Value
+            ?? element.Name.LocalName;
     }
 
     private static IReadOnlyList<Conversation> ParseConversations(string output, string type)

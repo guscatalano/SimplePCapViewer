@@ -110,6 +110,9 @@ To make setup easy, the running server **exposes ready-to-paste configuration**
 | `follow_stream` | Reassemble a tcp/udp/http/tls stream as text |
 | `extract_objects` | Carve transferred files (HTTP, SMB, …) out of the capture |
 | `set_tls_keylog` | Point the server at a TLS key log file to decrypt HTTPS everywhere |
+| `attach_events` / `list_attachments` / `detach_events` | Attach `.evtx` or `.etl` files alongside the pcap |
+| `search_events` | Search attached events (network-related by default) |
+| `events_near_packet` | Events within a time window around a given packet — for TLS/DNS/WLAN correlation |
 
 ## The viewer
 
@@ -137,6 +140,84 @@ Once set, search, dissection, follow-stream and object extraction all show decry
 traffic. `SSLKEYLOGFILE` is honored by Chromium browsers, Firefox, curl, Node.js and
 Python — but **not** by apps that use Windows SChannel (most native Win32 / .NET apps),
 which never emit key-log entries.
+
+## Attaching event logs & ETW traces
+
+The pcap is the primary view; **.evtx** and **.etl** files can be attached for the
+context the wire can't show — *why* a TLS handshake failed, which process owned a
+connection, which name was DNS-resolved, Wi-Fi disconnects that caused gaps, etc.
+
+**Attach** with the toolbar's *Attach…* button (`.evtx` or `.etl`) or with the
+`attach_events` MCP tool. Events from known network-related providers/channels
+(TCPIP, Winsock-AFD, DNS-Client, Schannel, DHCP, WLAN, SMB, WFP, …) are auto-tagged
+**network-relevant**; `search_events` and `events_near_packet` return only those by
+default. Pass `networkOnly=false` to broaden.
+
+### Collecting `.etl` (ETW traces)
+
+Easiest — turnkey scenarios already include the network providers (and the packets,
+which you can extract back as a pcap with `netsh trace convert`):
+
+```cmd
+netsh trace start scenario=netconnection capture=yes report=disabled tracefile=trace.etl
+:: ... reproduce ...
+netsh trace stop
+
+pktmon start --capture --pkt-size 0 --file-name trace.etl
+:: ... reproduce ...
+pktmon stop
+```
+
+Targeted, only the providers you want:
+
+```cmd
+logman create trace pcap-companion -ow -o trace.etl -ets ^
+    -p Microsoft-Windows-TCPIP ^
+    -p Microsoft-Windows-Winsock-AFD ^
+    -p Microsoft-Windows-DNS-Client ^
+    -p Microsoft-Windows-Schannel-Events ^
+    -p Microsoft-Windows-WFP ^
+    -p Microsoft-Windows-WinHTTP ^
+    -p Microsoft-Windows-WinINet
+:: ... reproduce ...
+logman stop pcap-companion -ets
+```
+
+### Collecting `.evtx` (Windows Event Log)
+
+Export a channel as-is:
+
+```cmd
+wevtutil epl System                                        sys.evtx
+wevtutil epl Microsoft-Windows-DNS-Client/Operational      dns.evtx
+wevtutil epl Microsoft-Windows-WLAN-AutoConfig/Operational wlan.evtx
+wevtutil epl Microsoft-Windows-NetworkProfile/Operational  netprofile.evtx
+wevtutil epl "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall" fw.evtx
+```
+
+Export only what you need from a noisy channel (e.g. Schannel TLS errors from System):
+
+```cmd
+wevtutil epl System schannel.evtx /q:"*[System/Provider/@Name='Schannel']"
+```
+
+Some channels are off by default — enable then export:
+
+```cmd
+wevtutil sl Microsoft-Windows-DNS-Client/Operational /e:true
+```
+
+### Most useful pairings
+
+| Provider / channel | What it adds beside the pcap |
+|---|---|
+| **`Microsoft-Windows-TCPIP`** | Stack internals: retransmit reasons, RTT, connection states, why an RST. |
+| **`Microsoft-Windows-Winsock-AFD`** | PID per socket — map a flow back to a process. |
+| **`Microsoft-Windows-DNS-Client`** | Name → IP mapping with timings. |
+| **`Microsoft-Windows-Schannel-Events`** *(ETL)* or **`System`/`Schannel`** *(EVTX)* | TLS handshake outcomes — version, cipher, **error reasons**. |
+| **`Microsoft-Windows-WLAN-AutoConfig`** | Wi-Fi associate/roam/disconnect — explains capture gaps. |
+| **`Microsoft-Windows-WFP`** | Firewall verdicts — which rule allowed/blocked. |
+| **`Microsoft-Windows-SMBClient`** | SMB session/auth/dialect details. |
 
 ## Known limitations
 

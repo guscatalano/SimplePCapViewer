@@ -6,10 +6,16 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RootNamespace>PcapViewer.Core</RootNamespace>
+    <!-- Whole project is Windows-only at runtime (tshark, EventLog, ETW); silence the cross-platform analyzer noise. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="PacketDotNet" Version="1.4.8" />
+    <!-- Reading .evtx files (Windows Event Log API). -->
+    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.8" />
+    <!-- Reading .etl files (ETW trace). -->
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.3" />
   </ItemGroup>
 
 </Project>

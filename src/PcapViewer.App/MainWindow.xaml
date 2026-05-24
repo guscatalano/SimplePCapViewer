@@ -30,6 +30,13 @@
                         <TextBlock x:Name="TlsButtonLabel" Text="TLS keys" />
                     </StackPanel>
                 </Button>
+                <Button Click="OnAttachClick"
+                        ToolTipService.ToolTip="Attach a Windows Event Log (.evtx) or ETW trace (.etl) for correlation">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE723;" FontSize="14" />
+                        <TextBlock x:Name="AttachButtonLabel" Text="Attach&#x2026;" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
 
             <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
@@ -39,9 +46,10 @@
             <ProgressRing Grid.Column="2" Width="20" Height="20"
                           IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
 
-            <TextBlock Grid.Column="3" VerticalAlignment="Center"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       Text="{x:Bind ViewModel.McpStatus, Mode=OneWay}" />
+            <HyperlinkButton Grid.Column="3" VerticalAlignment="Center" Padding="4,0"
+                             Click="OnMcpStatusClick"
+                             ToolTipService.ToolTip="Click for client configuration (URL + Claude Code / Claude Desktop / VS Code snippets)"
+                             Content="{x:Bind ViewModel.McpStatus, Mode=OneWay}" />
 
             <TextBox Grid.Column="4" Width="74" PlaceholderText="Port"
                      VerticalAlignment="Center" ToolTipService.ToolTip="MCP server port"
@@ -114,6 +122,16 @@
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="models:PacketSummary">
                             <Grid Padding="12,3" ColumnDefinitions="66,110,160,160,90,70,*">
+                                <Grid.ContextFlyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem Text="Copy row" Click="OnCopyPacketRow" />
+                                        <MenuFlyoutSeparator />
+                                        <MenuFlyoutItem Text="Copy source" Click="OnCopyPacketSource" />
+                                        <MenuFlyoutItem Text="Copy destination" Click="OnCopyPacketDestination" />
+                                        <MenuFlyoutItem Text="Copy protocol" Click="OnCopyPacketProtocol" />
+                                        <MenuFlyoutItem Text="Copy info" Click="OnCopyPacketInfo" />
+                                    </MenuFlyout>
+                                </Grid.ContextFlyout>
                                 <TextBlock Grid.Column="0" Text="{x:Bind Number}" TextAlignment="Right" Margin="0,0,12,0"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <TextBlock Grid.Column="1" Text="{x:Bind TimeDisplay}" FontFamily="Consolas" />
@@ -146,7 +164,14 @@
                         <TreeView.ItemTemplate>
                             <DataTemplate>
                                 <TextBlock Text="{Binding Content}" FontSize="12"
-                                           TextWrapping="NoWrap" Padding="0,2" />
+                                           TextWrapping="NoWrap" Padding="0,2">
+                                    <TextBlock.ContextFlyout>
+                                        <MenuFlyout>
+                                            <MenuFlyoutItem Text="Copy" Click="OnCopyDetailSubtree" />
+                                            <MenuFlyoutItem Text="Copy line only" Click="OnCopyDetailLine" />
+                                        </MenuFlyout>
+                                    </TextBlock.ContextFlyout>
+                                </TextBlock>
                             </DataTemplate>
                         </TreeView.ItemTemplate>
                     </TreeView>

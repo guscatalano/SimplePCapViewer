@@ -1,9 +1,11 @@
+using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using PcapViewer.Core;
 using PcapViewer.Core.Models;
 using PcapViewer.Mcp;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using Windows.System;
 
@@ -118,6 +120,43 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // ---- attach .evtx / .etl ---------------------------------------------
+
+    private async void OnAttachClick(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker
+        {
+            SuggestedStartLocation = PickerLocationId.Desktop,
+            ViewMode = PickerViewMode.List,
+        };
+        picker.FileTypeFilter.Add(".evtx");
+        picker.FileTypeFilter.Add(".etl");
+
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        var file = await picker.PickSingleFileAsync();
+        if (file is null)
+            return;
+
+        ViewModel.StatusText = $"Loading {file.Name}…";
+        try
+        {
+            var attachment = await PcapSession.Current.AttachAsync(file.Path);
+            int network = attachment.Events.Count(ev => ev.IsNetwork);
+            int total = PcapSession.Current.Attachments.Count;
+            AttachButtonLabel.Text = total == 1 ? "Attached (1)" : $"Attached ({total})";
+            ViewModel.StatusText =
+                $"Attached {file.Name}: {attachment.Events.Count:N0} events " +
+                $"({network:N0} network-related). " +
+                $"Total across attachments: {PcapSession.Current.EventIndex.Count:N0} events.";
+        }
+        catch (Exception ex)
+        {
+            ViewModel.StatusText = $"Attach failed: {ex.Message}";
+        }
+    }
+
     // ---- TLS decryption ---------------------------------------------------
 
     private async void OnTlsKeysClick(object sender, RoutedEventArgs e)
@@ -171,8 +210,8 @@ public sealed partial class MainWindow : Window
                 await _mcpHost.StartAsync(port);
                 ViewModel.McpStatus = $"MCP server: listening on {_mcpHost.Url}";
                 ViewModel.StatusText =
-                    $"MCP server started — connect a client to {_mcpHost.Url}  ·  " +
-                    $"copy-paste setup at {_mcpHost.ConfigUrl}";
+                    $"MCP server started — click the URL above for client setup, " +
+                    $"or open {_mcpHost.ConfigUrl} in a browser.";
             }
             catch (Exception ex)
             {
@@ -196,4 +235,74 @@ public sealed partial class MainWindow : Window
 
     private void OnWindowClosed(object sender, WindowEventArgs args)
         => _ = _mcpHost.StopAsync();
+
+    /// <summary>Show the MCP client-config dialog when the user clicks the running URL.</summary>
+    private async void OnMcpStatusClick(object sender, RoutedEventArgs e)
+    {
+        if (!_mcpHost.IsRunning)
+            return;
+        var dialog = new McpConfigDialog(_mcpHost.Url, _mcpHost.ConfigUrl)
+        {
+            XamlRoot = Content.XamlRoot,
+        };
+        await dialog.ShowAsync();
+    }
+
+    // ---- right-click copy -----------------------------------------------
+
+    private void OnCopyPacketRow(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is PacketSummary p)
+            SetClipboard($"{p.Number}\t{p.TimeDisplay}\t{p.Source}\t{p.Destination}\t" +
+                         $"{p.Protocol}\t{p.Length}\t{p.Info}");
+    }
+
+    private void OnCopyPacketSource(object sender, RoutedEventArgs e)
+        => CopyPacketField(sender, p => p.Source);
+
+    private void OnCopyPacketDestination(object sender, RoutedEventArgs e)
+        => CopyPacketField(sender, p => p.Destination);
+
+    private void OnCopyPacketProtocol(object sender, RoutedEventArgs e)
+        => CopyPacketField(sender, p => p.Protocol);
+
+    private void OnCopyPacketInfo(object sender, RoutedEventArgs e)
+        => CopyPacketField(sender, p => p.Info);
+
+    private void OnCopyDetailSubtree(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is TreeViewNode node)
+        {
+            var sb = new StringBuilder();
+            AppendSubtree(node, depth: 0, sb);
+            SetClipboard(sb.ToString().TrimEnd());
+        }
+    }
+
+    private void OnCopyDetailLine(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is TreeViewNode node)
+            SetClipboard(node.Content?.ToString() ?? string.Empty);
+    }
+
+    private static void AppendSubtree(TreeViewNode node, int depth, StringBuilder sb)
+    {
+        sb.Append(' ', depth * 2);
+        sb.AppendLine(node.Content?.ToString() ?? string.Empty);
+        foreach (var child in node.Children)
+            AppendSubtree(child, depth + 1, sb);
+    }
+
+    private static void CopyPacketField(object sender, Func<PacketSummary, string> selector)
+    {
+        if ((sender as FrameworkElement)?.DataContext is PacketSummary p)
+            SetClipboard(selector(p));
+    }
+
+    private static void SetClipboard(string text)
+    {
+        var package = new DataPackage();
+        package.SetText(text ?? string.Empty);
+        Clipboard.SetContent(package);
+    }
 }
