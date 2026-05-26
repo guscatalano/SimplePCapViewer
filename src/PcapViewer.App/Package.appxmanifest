@@ -8,7 +8,7 @@
   <Identity
     Name="GusCatalano.SimplePCapViewer"
     Publisher="CN=119E0257-3B74-437C-A728-AC7C50256853"
-    Version="1.0.0.0" />
+    Version="1.2.0.0" />
 
   <Properties>
     <DisplayName>SimplePCapViewer</DisplayName>

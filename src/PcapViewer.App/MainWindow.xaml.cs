@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -22,16 +23,57 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "SimplePCapViewer";
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(1320, 860));
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(1500, 900));
 
         var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
         if (File.Exists(iconPath))
             AppWindow.SetIcon(iconPath);
 
+        PcapSession.Current.AttachmentsChanged += OnAttachmentsChanged;
         Closed += OnWindowClosed;
     }
 
+    private void OnAttachmentsChanged(object? sender, EventArgs e)
+    {
+        int total = PcapSession.Current.Attachments.Count;
+        AttachButtonLabel.Text = total switch
+        {
+            0 => "Attach…",
+            1 => "Attached (1)",
+            _ => $"Attached ({total})",
+        };
+    }
+
     // ---- file open -------------------------------------------------------
+
+    /// <summary>
+    /// Open everything passed on the command line: the first capture (.pcap / .pcapng / .cap)
+    /// becomes the active document; .evtx / .etl files are attached. Auto-selects the first row.
+    /// </summary>
+    public async void OpenFromCommandLineAsync(IReadOnlyList<string> paths)
+    {
+        string? capturePath = paths.FirstOrDefault(p =>
+        {
+            string ext = Path.GetExtension(p).ToLowerInvariant();
+            return ext is ".pcap" or ".pcapng" or ".cap";
+        });
+
+        if (capturePath is not null)
+            await ViewModel.OpenAsync(capturePath);
+
+        foreach (var p in paths)
+        {
+            string ext = Path.GetExtension(p).ToLowerInvariant();
+            if (ext is ".evtx" or ".etl")
+            {
+                try { await PcapSession.Current.AttachAsync(p); }
+                catch (Exception ex) { ViewModel.StatusText = $"Attach failed for {Path.GetFileName(p)}: {ex.Message}"; }
+            }
+        }
+
+        if (ViewModel.Timeline.Count > 0)
+            ViewModel.SelectedRow = ViewModel.Timeline[0];
+    }
 
     private async void OnOpenClick(object sender, RoutedEventArgs e)
     {
@@ -70,19 +112,29 @@ public sealed partial class MainWindow : Window
     // ---- packet detail ---------------------------------------------------
 
     private async void OnPacketSelectionChanged(object sender, SelectionChangedEventArgs e)
-        => await LoadSelectedPacketDetailAsync();
+        => await LoadSelectedRowDetailAsync();
 
-    private async Task LoadSelectedPacketDetailAsync()
+    private async Task LoadSelectedRowDetailAsync()
     {
-        var packet = ViewModel.SelectedPacket;
+        var row = ViewModel.SelectedRow;
         DetailTree.RootNodes.Clear();
         ViewModel.HexDump = "";
 
-        if (packet is null)
+        if (row is null)
         {
             ViewModel.DetailStatus = "Select a packet to see its dissection.";
             return;
         }
+
+        if (row.IsEvent && row.Event is not null)
+        {
+            ShowEventDetail(row.Event);
+            return;
+        }
+
+        var packet = row.Packet;
+        if (packet is null)
+            return;
 
         var document = PcapSession.Current.Document;
         if (document is null)
@@ -104,12 +156,18 @@ public sealed partial class MainWindow : Window
             var detail = await tshark.GetDetailAsync(document.FilePath, packet.Number);
 
             // The selection may have changed while tshark was running.
-            if (ViewModel.SelectedPacket?.Number != packet.Number)
+            if (ViewModel.SelectedRow?.Packet?.Number != packet.Number)
                 return;
 
             DetailTree.RootNodes.Clear();
             foreach (var proto in detail.Protocols)
-                DetailTree.RootNodes.Add(BuildNode(proto));
+            {
+                // Default-collapse the verbose meta layers ("General information" and
+                // "Frame N: …") so the actual protocol stack is visible without scrolling.
+                bool collapseRoot = proto.Label.StartsWith("General ", StringComparison.OrdinalIgnoreCase)
+                                 || proto.Label.StartsWith("Frame ",   StringComparison.OrdinalIgnoreCase);
+                DetailTree.RootNodes.Add(BuildNode(proto, isRootExpanded: !collapseRoot));
+            }
 
             ViewModel.DetailStatus =
                 $"Packet {packet.Number} — {detail.Protocols.Count} protocol layer(s)";
@@ -118,6 +176,34 @@ public sealed partial class MainWindow : Window
         {
             ViewModel.DetailStatus = $"Dissection failed: {ex.Message}";
         }
+    }
+
+    /// <summary>Render an attached event in the dissection pane (no tshark involved).</summary>
+    private void ShowEventDetail(PcapViewer.Core.Events.EventEntry ev)
+    {
+        var root = new TreeViewNode
+        {
+            Content = $"Event {ev.EventId} — {ev.Provider}",
+            IsExpanded = true,
+        };
+        root.Children.Add(new TreeViewNode { Content = $"Timestamp: {ev.Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz}" });
+        root.Children.Add(new TreeViewNode { Content = $"Level: {ev.Level}" });
+        root.Children.Add(new TreeViewNode { Content = $"Provider: {ev.Provider}" });
+        if (!string.IsNullOrEmpty(ev.Channel))
+            root.Children.Add(new TreeViewNode { Content = $"Channel: {ev.Channel}" });
+        root.Children.Add(new TreeViewNode { Content = $"Event ID: {ev.EventId}" });
+        if (ev.ProcessId.HasValue)
+            root.Children.Add(new TreeViewNode { Content = $"Process ID: {ev.ProcessId.Value}" });
+        root.Children.Add(new TreeViewNode { Content = $"Source: .{ev.Source}  ({Path.GetFileName(ev.AttachmentFile)})" });
+
+        var message = new TreeViewNode { Content = "Message", IsExpanded = true };
+        foreach (var line in (ev.Message ?? "").Split('\n'))
+            message.Children.Add(new TreeViewNode { Content = line.TrimEnd('\r') });
+        root.Children.Add(message);
+
+        DetailTree.RootNodes.Add(root);
+        ViewModel.DetailStatus = $"Event #{ev.EventId} — {ev.Provider} — attached from {Path.GetFileName(ev.AttachmentFile)}";
+        ViewModel.HexDump = "";
     }
 
     // ---- attach .evtx / .etl ---------------------------------------------
@@ -131,30 +217,35 @@ public sealed partial class MainWindow : Window
         if (result != ContentDialogResult.Primary)
             return;
 
-        var picker = new FileOpenPicker
-        {
-            SuggestedStartLocation = PickerLocationId.Desktop,
-            ViewMode = PickerViewMode.List,
-        };
-        picker.FileTypeFilter.Add(".evtx");
-        picker.FileTypeFilter.Add(".etl");
-
+        // WinRT FileOpenPicker silently fails to appear when shown right after a
+        // ContentDialog closes in unpackaged WinUI 3. The classic Win32 picker is
+        // synchronous and always shows, so we use that here.
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+        string filter =
+            "Event log / ETW trace (*.evtx;*.etl)\0*.evtx;*.etl\0" +
+            "Windows event log (*.evtx)\0*.evtx\0" +
+            "ETW trace (*.etl)\0*.etl\0" +
+            "All files (*.*)\0*.*\0";
 
-        var file = await picker.PickSingleFileAsync();
-        if (file is null)
+        string? path = Win32FilePicker.PickSingleFile(hwnd,
+            title: "Attach event log or ETW trace",
+            filter: filter);
+
+        if (path is null)
+        {
+            ViewModel.StatusText = "Attach cancelled.";
             return;
+        }
 
-        ViewModel.StatusText = $"Loading {file.Name}…";
+        string fileName = Path.GetFileName(path);
+        ViewModel.StatusText = $"Loading {fileName}…";
         try
         {
-            var attachment = await PcapSession.Current.AttachAsync(file.Path);
+            var attachment = await PcapSession.Current.AttachAsync(path);
             int network = attachment.Events.Count(ev => ev.IsNetwork);
-            int total = PcapSession.Current.Attachments.Count;
-            AttachButtonLabel.Text = total == 1 ? "Attached (1)" : $"Attached ({total})";
+            // AttachButtonLabel is updated by OnAttachmentsChanged.
             ViewModel.StatusText =
-                $"Attached {file.Name}: {attachment.Events.Count:N0} events " +
+                $"Attached {fileName}: {attachment.Events.Count:N0} events " +
                 $"({network:N0} network-related). " +
                 $"Total across attachments: {PcapSession.Current.EventIndex.Count:N0} events.";
         }
@@ -188,12 +279,12 @@ public sealed partial class MainWindow : Window
             $"TLS key log loaded — HTTPS is now decrypted in search and dissection ({file.Path}).";
 
         // Re-dissect the selected packet so decryption shows immediately.
-        await LoadSelectedPacketDetailAsync();
+        await LoadSelectedRowDetailAsync();
     }
 
-    private static TreeViewNode BuildNode(PacketDetailNode source)
+    private static TreeViewNode BuildNode(PacketDetailNode source, bool isRootExpanded = true)
     {
-        var node = new TreeViewNode { Content = source.Label, IsExpanded = true };
+        var node = new TreeViewNode { Content = source.Label, IsExpanded = isRootExpanded };
         foreach (var child in source.Children)
             node.Children.Add(BuildNode(child));
         return node;
@@ -259,22 +350,22 @@ public sealed partial class MainWindow : Window
 
     private void OnCopyPacketRow(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is PacketSummary p)
-            SetClipboard($"{p.Number}\t{p.TimeDisplay}\t{p.Source}\t{p.Destination}\t" +
-                         $"{p.Protocol}\t{p.Length}\t{p.Info}");
+        if ((sender as FrameworkElement)?.DataContext is TimelineRow r)
+            SetClipboard($"{r.NumberDisplay}\t{r.TimeDisplay}\t{r.Source}\t{r.Destination}\t" +
+                         $"{r.Protocol}\t{r.LengthDisplay}\t{r.Info}");
     }
 
     private void OnCopyPacketSource(object sender, RoutedEventArgs e)
-        => CopyPacketField(sender, p => p.Source);
+        => CopyRowField(sender, r => r.Source);
 
     private void OnCopyPacketDestination(object sender, RoutedEventArgs e)
-        => CopyPacketField(sender, p => p.Destination);
+        => CopyRowField(sender, r => r.Destination);
 
     private void OnCopyPacketProtocol(object sender, RoutedEventArgs e)
-        => CopyPacketField(sender, p => p.Protocol);
+        => CopyRowField(sender, r => r.Protocol);
 
     private void OnCopyPacketInfo(object sender, RoutedEventArgs e)
-        => CopyPacketField(sender, p => p.Info);
+        => CopyRowField(sender, r => r.Info);
 
     private void OnCopyDetailSubtree(object sender, RoutedEventArgs e)
     {
@@ -300,10 +391,10 @@ public sealed partial class MainWindow : Window
             AppendSubtree(child, depth + 1, sb);
     }
 
-    private static void CopyPacketField(object sender, Func<PacketSummary, string> selector)
+    private static void CopyRowField(object sender, Func<TimelineRow, string> selector)
     {
-        if ((sender as FrameworkElement)?.DataContext is PacketSummary p)
-            SetClipboard(selector(p));
+        if ((sender as FrameworkElement)?.DataContext is TimelineRow r)
+            SetClipboard(selector(r));
     }
 
     private static void SetClipboard(string text)

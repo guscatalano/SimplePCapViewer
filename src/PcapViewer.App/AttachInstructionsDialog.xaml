@@ -14,60 +14,96 @@
         <x:Double x:Key="ContentDialogMaxWidth">880</x:Double>
     </ContentDialog.Resources>
 
-    <ScrollViewer MaxHeight="600" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
-        <StackPanel Spacing="14" MinWidth="720" Padding="0,0,14,0">
+    <StackPanel Spacing="12" MinWidth="720">
 
-            <TextBlock TextWrapping="Wrap"
-                Text="Attach a Windows .evtx or .etl file alongside the pcap for OS-side context — DNS lookups, TLS handshake errors, Wi-Fi events, firewall verdicts, PID-per-socket. Pick a capture command below, run it in an Administrator command prompt, then click Browse." />
-
-            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                       Text="ETW trace — packets + TCPIP / Winsock-AFD / DNS / Schannel" />
-            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       Text="Produces trace.etl in the current directory. Run as Administrator." />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Grid.Column="0" x:Name="NetshBox" IsReadOnly="True" FontFamily="Consolas"
-                         AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto" />
-                <Button Grid.Column="1" Click="OnCopyNetsh" Content="Copy" VerticalAlignment="Top" />
-            </Grid>
-
-            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                       Text="Targeted ETW — only the providers you want" />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Grid.Column="0" x:Name="LogmanBox" IsReadOnly="True" FontFamily="Consolas"
-                         AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="100"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto" />
-                <Button Grid.Column="1" Click="OnCopyLogman" Content="Copy" VerticalAlignment="Top" />
-            </Grid>
-
-            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                       Text="Schannel TLS errors from the System event log" />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Grid.Column="0" x:Name="SchannelBox" IsReadOnly="True" FontFamily="Consolas"
-                         TextWrapping="NoWrap" ScrollViewer.HorizontalScrollBarVisibility="Auto" />
-                <Button Grid.Column="1" Click="OnCopySchannel" Content="Copy" />
-            </Grid>
-
-            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                       Text="DNS lookups (Microsoft-Windows-DNS-Client/Operational)" />
-            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       Text="The channel is off by default; the first command enables it." />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Grid.Column="0" x:Name="DnsBox" IsReadOnly="True" FontFamily="Consolas"
-                         AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="48"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto" />
-                <Button Grid.Column="1" Click="OnCopyDns" Content="Copy" VerticalAlignment="Top" />
-            </Grid>
-
-            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                       Text="Wi-Fi associate / disconnect / roam" />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Grid.Column="0" x:Name="WlanBox" IsReadOnly="True" FontFamily="Consolas"
-                         TextWrapping="NoWrap" ScrollViewer.HorizontalScrollBarVisibility="Auto" />
-                <Button Grid.Column="1" Click="OnCopyWlan" Content="Copy" />
-            </Grid>
-
-            <HyperlinkButton Click="OnOpenReadme" Content="Full list and providers in the README" />
+        <StackPanel x:Name="AttachedSection" Spacing="6" Visibility="Collapsed">
+            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Currently attached" />
+            <ItemsControl x:Name="AttachedList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                BorderThickness="1" CornerRadius="4" Padding="10,6" Margin="0,0,0,4">
+                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12" VerticalAlignment="Center">
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding FileName}" FontFamily="Consolas" />
+                                    <TextBlock Text="{Binding PathDisplay}" FontSize="11"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding EventCountLabel}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           VerticalAlignment="Center" />
+                                <Button Grid.Column="2" Content="Detach" Click="OnDetachClick"
+                                        Tag="{Binding FilePath}" VerticalAlignment="Center" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
         </StackPanel>
-    </ScrollViewer>
+
+        <TextBlock TextWrapping="Wrap"
+            Text="Attach a Windows .evtx or .etl file alongside the pcap for OS-side context — DNS lookups, TLS handshake errors, Wi-Fi events, firewall verdicts, PID-per-socket." />
+
+        <TextBlock TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Text="Already have a file? Click Browse below. Otherwise expand the section for capture commands you can copy-paste into an Administrator console." />
+
+        <Expander Header="How to collect .etl / .evtx" HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Stretch" IsExpanded="False">
+            <ScrollViewer MaxHeight="460" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
+                <StackPanel Spacing="14" Padding="0,4,14,4">
+
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Text="ETW trace — packets + TCPIP / Winsock-AFD / DNS / Schannel" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Produces trace.etl in the current directory. Run as Administrator." />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" x:Name="NetshBox" IsReadOnly="True" FontFamily="Consolas"
+                                 AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                        <Button Grid.Column="1" Click="OnCopyNetsh" Content="Copy" VerticalAlignment="Top" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Text="Targeted ETW — only the providers you want" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" x:Name="LogmanBox" IsReadOnly="True" FontFamily="Consolas"
+                                 AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="100"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                        <Button Grid.Column="1" Click="OnCopyLogman" Content="Copy" VerticalAlignment="Top" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Text="Schannel TLS errors from the System event log" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" x:Name="SchannelBox" IsReadOnly="True" FontFamily="Consolas"
+                                 TextWrapping="NoWrap" ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                        <Button Grid.Column="1" Click="OnCopySchannel" Content="Copy" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Text="DNS lookups (Microsoft-Windows-DNS-Client/Operational)" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="The channel is off by default; the first command enables it." />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" x:Name="DnsBox" IsReadOnly="True" FontFamily="Consolas"
+                                 AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="48"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                        <Button Grid.Column="1" Click="OnCopyDns" Content="Copy" VerticalAlignment="Top" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Text="Wi-Fi associate / disconnect / roam" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" x:Name="WlanBox" IsReadOnly="True" FontFamily="Consolas"
+                                 TextWrapping="NoWrap" ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                        <Button Grid.Column="1" Click="OnCopyWlan" Content="Copy" />
+                    </Grid>
+
+                    <HyperlinkButton Click="OnOpenReadme" Content="Full list and providers in the README" />
+                </StackPanel>
+            </ScrollViewer>
+        </Expander>
+    </StackPanel>
 </ContentDialog>

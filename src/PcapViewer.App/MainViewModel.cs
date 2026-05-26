@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using PcapViewer.Core;
+using PcapViewer.Core.Events;
 using PcapViewer.Core.Models;
 using PcapViewer.Mcp;
 
@@ -28,11 +29,13 @@ public partial class MainViewModel : ObservableObject
         QuickSearch = "";
         DisplayFilter = "";
         ResultInfo = "";
-        Packets = Array.Empty<PacketSummary>();
+        Timeline = Array.Empty<TimelineRow>();
         HexDump = "";
         DetailStatus = "Select a packet to see its dissection.";
         McpStatus = "MCP server: stopped";
         PortText = McpHost.DefaultPort.ToString();
+
+        PcapSession.Current.AttachmentsChanged += (_, _) => RebuildTimeline();
     }
 
     [ObservableProperty] public partial string FileName { get; set; }
@@ -40,15 +43,15 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string QuickSearch { get; set; }
     [ObservableProperty] public partial string DisplayFilter { get; set; }
     [ObservableProperty] public partial string ResultInfo { get; set; }
-    [ObservableProperty] public partial IReadOnlyList<PacketSummary> Packets { get; set; }
-    [ObservableProperty] public partial PacketSummary? SelectedPacket { get; set; }
+    [ObservableProperty] public partial IReadOnlyList<TimelineRow> Timeline { get; set; }
+    [ObservableProperty] public partial TimelineRow? SelectedRow { get; set; }
     [ObservableProperty] public partial string HexDump { get; set; }
     [ObservableProperty] public partial string DetailStatus { get; set; }
     [ObservableProperty] public partial string McpStatus { get; set; }
     [ObservableProperty] public partial string PortText { get; set; }
     [ObservableProperty] public partial bool IsBusy { get; set; }
 
-    /// <summary>Loads a capture file and refreshes the packet list.</summary>
+    /// <summary>Loads a capture file and refreshes the timeline.</summary>
     public async Task OpenAsync(string path)
     {
         IsBusy = true;
@@ -59,7 +62,7 @@ public partial class MainViewModel : ObservableObject
             _basePackets = document.Packets;
             QuickSearch = "";
             DisplayFilter = "";
-            ApplyQuickSearch();
+            RebuildTimeline();
 
             var info = document.Info;
             FileName = $"{info.FileName}   ·   {info.PacketCount:N0} packets   ·   " +
@@ -71,7 +74,7 @@ public partial class MainViewModel : ObservableObject
         {
             FileName = "No capture open";
             _basePackets = Array.Empty<PacketSummary>();
-            ApplyQuickSearch();
+            RebuildTimeline();
             StatusText = $"Failed to open file: {ex.Message}";
         }
         finally
@@ -80,23 +83,57 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    partial void OnQuickSearchChanged(string value) => ApplyQuickSearch();
+    partial void OnQuickSearchChanged(string value) => RebuildTimeline();
 
-    private void ApplyQuickSearch()
+    /// <summary>
+    /// Re-merges the current packet set with attached events, sorts by timestamp,
+    /// and applies the quick-search filter. Cheap; the inputs are already in memory.
+    /// </summary>
+    private void RebuildTimeline()
     {
-        string text = QuickSearch?.Trim() ?? "";
-        Packets = text.Length == 0
-            ? _basePackets
-            : _basePackets.Where(p =>
-                p.Source.Contains(text, Ci) ||
-                p.Destination.Contains(text, Ci) ||
-                p.Protocol.Contains(text, Ci) ||
-                p.Info.Contains(text, Ci) ||
-                p.Number.ToString().Contains(text, Ci)).ToList();
+        var packetRows = _basePackets.Select(TimelineRow.ForPacket);
 
-        ResultInfo = _basePackets.Count == 0
-            ? ""
-            : $"Showing {Packets.Count:N0} of {_basePackets.Count:N0}";
+        // Anchor event times to the same epoch as packets so the Time column lines up.
+        var allEvents = PcapSession.Current.EventIndex.All;
+        DateTimeOffset baseTs = _basePackets.Count > 0
+            ? _basePackets[0].Timestamp
+            : (allEvents.Count > 0 ? allEvents[0].Timestamp : DateTimeOffset.UtcNow);
+
+        // Show every attached event in the timeline. The IsNetwork flag is only used
+        // by MCP tools to narrow results by default — in the GUI, if the user attached
+        // a file they want to see everything it contained.
+        var eventRows = allEvents.Select(ev => TimelineRow.ForEvent(ev, baseTs));
+
+        var merged = packetRows.Concat(eventRows)
+            .OrderBy(r => r.Timestamp)
+            .ToList();
+
+        string text = QuickSearch?.Trim() ?? "";
+        IReadOnlyList<TimelineRow> filtered = text.Length == 0
+            ? merged
+            : merged.Where(r =>
+                r.Source.Contains(text, Ci) ||
+                r.Destination.Contains(text, Ci) ||
+                r.Protocol.Contains(text, Ci) ||
+                r.Info.Contains(text, Ci) ||
+                r.NumberDisplay.Contains(text, Ci)).ToList();
+
+        Timeline = filtered;
+
+        int packetCount = _basePackets.Count;
+        int eventCount = merged.Count - packetCount;
+        if (packetCount == 0 && eventCount == 0)
+        {
+            ResultInfo = "";
+        }
+        else if (eventCount == 0)
+        {
+            ResultInfo = $"Showing {filtered.Count:N0} of {packetCount:N0}";
+        }
+        else
+        {
+            ResultInfo = $"Showing {filtered.Count:N0} of {packetCount:N0} packets + {eventCount:N0} events";
+        }
     }
 
     /// <summary>Runs the Wireshark display filter through tshark and replaces the base packet set.</summary>
@@ -125,7 +162,7 @@ public partial class MainViewModel : ObservableObject
         {
             var matches = await tshark.SearchAsync(document.FilePath, DisplayFilter);
             _basePackets = matches;
-            ApplyQuickSearch();
+            RebuildTimeline();
             StatusText = $"Display filter matched {matches.Count:N0} packet(s).";
         }
         catch (Exception ex)
@@ -144,7 +181,7 @@ public partial class MainViewModel : ObservableObject
     {
         DisplayFilter = "";
         _basePackets = PcapSession.Current.Document?.Packets ?? Array.Empty<PacketSummary>();
-        ApplyQuickSearch();
+        RebuildTimeline();
         StatusText = "Display filter cleared.";
     }
 }
